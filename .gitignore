@@ -1,0 +1,9 @@
+# Exclusions
+!*.code-workspace
+
+# Log files
+**/*.log
+**/*.out
+**/*.err
+**/*.txt
+**/*.env

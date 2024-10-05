@@ -31,7 +31,7 @@ date_default_timezone_set('Asia/Kolkata');
 function logMessage($message) {
     $timestamp = date('Y-m-d H:i:s');
     $logEntry = "[$timestamp IST] $message\n";
-    file_put_contents(__DIR__ . '/interruption-alerts.log', $logEntry, FILE_APPEND);
+    // file_put_contents(__DIR__ . '/interruption-alerts.log', $logEntry, FILE_APPEND);
     echo $logEntry;
 }
 

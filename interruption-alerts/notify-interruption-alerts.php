@@ -1,4 +1,3 @@
-
 <?php
 
 ini_set('display_errors', 1);
@@ -10,9 +9,12 @@ error_reporting(E_ALL);
 $config = parse_ini_file(__DIR__ . '/config.env');
 
 // Customizable variables
-$searchKeywords = ['interrupted', 'Electricity supply', 'Water supply'];  // Add or remove keywords as needed
-$hoursToLookBack = 1;  // Change this to the number of hours you want to look back
-$slackWebhookUrl = $config['SLACK_WEBHOOK'] ?? '';  // Get Slack webhook URL from config.env
+$searchKeywords = ['interrupted', 'Electricity supply', 'Water supply'];
+$timeframe = [
+    'value' => 1,
+    'unit' => 'hours'  // Can be 'minutes', 'hours', or 'days'
+];
+$slackWebhookUrl = $config['SLACK_WEBHOOK'] ?? '';
 
 if (empty($slackWebhookUrl)) {
     logMessage("ERROR: Slack webhook URL is not set in config.env");
@@ -25,78 +27,13 @@ $dbPath = $_SERVER['HOME'] . '/Library/Messages/chat.db';
 // Set timezone to IST
 date_default_timezone_set('Asia/Kolkata');
 
-// Check if log file is writable
-$logFile = __DIR__ . '/interruption-alerts.log';
-if (!is_writable($logFile)) {
-    error_log("Log file is not writable: $logFile");
-    // Try to create it if it doesn't exist
-    if (!file_exists($logFile)) {
-        file_put_contents($logFile, '');
-    }
-    // Set permissions
-    chmod($logFile, 0666);
-}
-
 // Function to log messages with timestamp in IST
 function logMessage($message) {
     $timestamp = date('Y-m-d H:i:s');
     $logEntry = "[$timestamp IST] $message\n";
     file_put_contents(__DIR__ . '/interruption-alerts.log', $logEntry, FILE_APPEND);
-    echo $logEntry; // This will output to stdout, which should be captured in the log file specified in the plist
+    echo $logEntry;
 }
-
-// Function to clean up old log entries
-function cleanupLogs($maxAgeDays = 7, $maxSizeMB = 10) {
-    $logFiles = [
-        __DIR__ . '/interruption-alerts.log',
-        __DIR__ . '/interruption-alerts-error.log'
-    ];
-
-    foreach ($logFiles as $logFile) {
-        if (!file_exists($logFile)) continue;
-
-        // Check file size
-        $sizeInMB = filesize($logFile) / 1024 / 1024;
-        if ($sizeInMB > $maxSizeMB) {
-            file_put_contents($logFile, "Log file truncated due to size limit.\n");
-            $needsTruncate = true;
-        } else {
-            $needsTruncate = false;
-        }
-
-        $tempFile = $logFile . '.temp';
-        $cutoffTime = strtotime("-{$maxAgeDays} days");
-
-        $inHandle = fopen($logFile, 'r');
-        $outHandle = fopen($tempFile, 'w');
-
-        while (($line = fgets($inHandle)) !== false) {
-            // Try to extract timestamp from the beginning of the line
-            if (preg_match('/^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/', $line, $matches)) {
-                $logTime = strtotime($matches[1]);
-                if ($logTime >= $cutoffTime && !$needsTruncate) {
-                    fwrite($outHandle, $line);
-                }
-            } else {
-                // If line doesn't start with a timestamp, keep it (could be part of a stack trace)
-                if (!$needsTruncate) {
-                    fwrite($outHandle, $line);
-                }
-            }
-        }
-
-        fclose($inHandle);
-        fclose($outHandle);
-
-        // Replace old file with new file
-        rename($tempFile, $logFile);
-    }
-}
-
-// Call cleanup function at the start of the script
-cleanupLogs(7, 10);  // Keep logs for 7 days, truncate if larger than 10MB
-
-logMessage("Script started execution");
 
 // Function to send Slack notification
 function sendSlackNotification($message) {
@@ -131,7 +68,13 @@ function markAsNotified($messageId) {
     file_put_contents($notifiedFile, $messageId . PHP_EOL, FILE_APPEND);
 }
 
+// Function to format timeframe for display
+function formatTimeframe($value, $unit) {
+    return "$value " . ($value == 1 ? rtrim($unit, 's') : $unit);
+}
+
 // Debug information
+logMessage("Script started execution");
 logMessage("Script executed by user: " . exec('whoami'));
 logMessage("PHP version: " . phpversion());
 logMessage("Database path: " . $dbPath);
@@ -139,6 +82,8 @@ logMessage("File exists: " . (file_exists($dbPath) ? 'Yes' : 'No'));
 logMessage("Is readable: " . (is_readable($dbPath) ? 'Yes' : 'No'));
 logMessage("File permissions: " . substr(sprintf('%o', fileperms($dbPath)), -4));
 logMessage("File owner: " . posix_getpwuid(fileowner($dbPath))['name']);
+logMessage("Timeframe: " . formatTimeframe($timeframe['value'], $timeframe['unit']));
+logMessage("Keywords: " . implode(', ', $searchKeywords));
 
 if (!file_exists($dbPath)) {
     logMessage("ERROR: Messages database file does not exist.");
@@ -153,6 +98,7 @@ if (!is_readable($dbPath)) {
     exit(1);
 }
 
+// Establish database connection
 try {
     $db = new PDO('sqlite:' . $dbPath);
     $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
@@ -163,9 +109,10 @@ try {
     exit(1);
 }
 
+// Query the database
 try {
     $keywordConditions = implode(' OR ', array_map(function($keyword) {
-        return "message.text LIKE :keyword_" . md5($keyword);
+        return "LOWER(message.text) LIKE LOWER(:keyword_" . md5($keyword) . ")";
     }, $searchKeywords));
 
     $query = $db->prepare("
@@ -191,7 +138,7 @@ try {
                 AND length(message.text) > 0
                 AND ($keywordConditions)
                 AND datetime(message.date / 1000000000 + strftime('%s', '2001-01-01'), 'unixepoch', 'localtime')
-                        >= datetime('now', :timeframe, 'localtime')
+                        >= datetime('now', '-' || :timeframe_value || ' ' || :timeframe_unit, 'localtime')
         )
         SELECT * FROM RankedMessages
         WHERE rn = 1
@@ -199,9 +146,12 @@ try {
     ");
     logMessage("Query prepared successfully");
 
-    $params = [':timeframe' => '-' . $hoursToLookBack . ' hours'];
+    $params = [
+        ':timeframe_value' => $timeframe['value'],
+        ':timeframe_unit' => $timeframe['unit']
+    ];
     foreach ($searchKeywords as $keyword) {
-        $params[':keyword_' . md5($keyword)] = '%' . $keyword . '%';
+        $params[':keyword_' . md5($keyword)] = '%' . strtolower($keyword) . '%';
     }
     $query->execute($params);
     logMessage("Query executed successfully");
@@ -213,15 +163,17 @@ try {
 }
 
 $found = false;
+$messageCount = 0;
 
 while ($message = $query->fetch(PDO::FETCH_ASSOC)) {
     $found = true;
+    $messageCount++;
     $date = date('Y-m-d H:i:s', strtotime($message['message_date']));
     $sender = formatSender($message['sender']);
     $text = $message['text'];
     $messageId = $message['rowid'];
 
-    logMessage("Debug - Message found:");
+    logMessage("Message found:");
     logMessage("Date: " . $date);
     logMessage("From: " . $sender);
     logMessage("Text: " . $text);
@@ -246,7 +198,12 @@ while ($message = $query->fetch(PDO::FETCH_ASSOC)) {
     logMessage("");
 }
 
-logMessage($found ? "Found messages matching keywords" : "No new messages containing any of the keywords found in the last $hoursToLookBack hours.");
+$timeframeStr = formatTimeframe($timeframe['value'], $timeframe['unit']);
+if ($found) {
+    logMessage("Found $messageCount message(s) matching keywords in the last $timeframeStr");
+} else {
+    logMessage("No new messages containing any of the keywords found in the last $timeframeStr");
+}
 
 logMessage("Script execution completed.");
 logMessage("----------------------------------------");

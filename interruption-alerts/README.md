@@ -93,6 +93,14 @@ To modify the script's behavior:
 3. Edit `config.env` to update the Slack webhook URL or add other environment variables.
 4. After any changes, reload the launchd job as described above.
 
+## Dry Run
+
+Run below command to look for messages with custom keywords & time interval;
+
+```bash
+php ~/Scripts/interruption-alerts/debug_message_search.php
+```
+
 ## Troubleshooting
 
 If the script isn't running as expected:

@@ -123,6 +123,16 @@ If the script isn't running as expected:
 
 For any persistent issues, review the script, plist file, and config.env contents and ensure all paths and settings are correct for your system.
 
+## Full Disk Access to PHP
+
+PHP requires Full Disk Access to to run this script. In case PHP got upgraded, the permissions will reset & need to be added manually.
+
+1. Open Full Disk Access settings
+   ```bash
+   open "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
+   ```
+2. Press `Command + Shift + G` & type `/opt/homebrew/bin/php`
+
 ## Security Note
 
 The `config.env` file contains sensitive information (your Slack webhook URL). Ensure it's not accessible to other users on your system and never commit it to version control systems.

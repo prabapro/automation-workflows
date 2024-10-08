@@ -19,7 +19,6 @@ if [ -z "$HOMEBREW_SLACK_WEBHOOK" ]; then
     exit 1
 fi
 
-
 # Function to log messages
 log_message() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
@@ -67,12 +66,29 @@ extract_updates() {
     echo "$update_info"
 }
 
-
-
 # Function to send Slack notification
 send_slack_notification() {
     local message="$1"
-    curl -X POST -H 'Content-type: application/json' --data "{\"text\":\"$message\"}" "$HOMEBREW_SLACK_WEBHOOK"
+    local json_payload=$(printf '{"text":"%s"}' "${message}")
+    curl -X POST -H 'Content-type: application/json' --data "$json_payload" "$HOMEBREW_SLACK_WEBHOOK"
+}
+
+# Function to escape string for JSON
+escape_json() {
+    local string="$1"
+    string="${string//\\/\\\\}"
+    string="${string//\"/\\\"}"
+    string="${string//	/\\t}"
+    string="${string//
+/\\n}"
+    string="${string//^M/\\r}"
+    echo "$string"
+}
+
+# Function to check if PHP was updated
+check_php_update() {
+    local update_info="$1"
+    echo "$update_info" | grep -q "php"
 }
 
 # Log start of script
@@ -121,7 +137,19 @@ updated_packages=$(extract_updates "$upgrade_output")
 
 if [ -n "$updated_packages" ]; then
     # Prepare Slack message
-    slack_message="The following \`Homebrew\` packages were updated:\n\`\`\`\n$updated_packages\n\`\`\`"
+    slack_message="The following \`Homebrew\` packages were updated:\\n\`\`\`\\n$(escape_json "$updated_packages")\\n\`\`\`"
+    
+    # Check if PHP was updated
+    if check_php_update "$updated_packages"; then
+        php_note="
+🧰 PHP requires Full Disk Access to run certain scripts like power interruption alerts.
+
+1. Open Full Disk Access settings
+\`\`\`open \"x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles\"\`\`\`
+2. Press \`Command + Shift + G\` & type \`/opt/homebrew/bin/php\`
+"
+        slack_message="${slack_message}\\n$(escape_json "$php_note")"
+    fi
     
     send_slack_notification "$slack_message"
     log_message "Slack notification sent for package updates"
